@@ -55,10 +55,18 @@ class LogStash::Codecs::LEEF < LogStash::Codecs::Base
   # Fields to be included in LEEF extension part as key/value pairs
   config :fields, :validate => :array, :default => []
 
+HEADER_FIELDS = ['leef_version', 'leef_vendor', 'leef_product', 'leef_device_version', 'leef_eventid']
+
   public
   def initialize(params={})
     super(params)
   end
+
+private
+def store_header_field(event,field_name,field_data)
+    #Unescape pipes and backslash in header fields
+    event.set(field_name,field_data.gsub(/\\\|/, '|').gsub(/\\\\/, '\\')) unless field_data.nil?
+end
 
   public
   def decode(data)
@@ -73,25 +81,24 @@ class LogStash::Codecs::LEEF < LogStash::Codecs::Base
     # gives an "SyntaxError: (RegexpError) invalid pattern in look-behind" for the variable length look behind.
     # Therefore one edge case is not handled properly: \\| (this should split, but it does not, because the escaped \ is not recognized)
     # TODO: To solve all unescaping cases, regex is not suitable. A little parse should be written.
-    event['leef_version'], event['leef_vendor'], event['leef_product'], event['leef_device_version'], event['leef_eventid'], *message = data.split /(?<=[^\\]\\\\)[\|]|(?<!\\)[\|]/
-    message = message.join('|')
+    split_data = data.split /(?<=[^\\]\\\\)[\|]|(?<!\\)[\|]/
 
-    # Unescape pipes and backslash in header fields
-    event['leef_version'] = event['leef_version'].gsub(/\\\|/, '|').gsub(/\\\\/, '\\')
-    event['leef_vendor'] = event['leef_vendor'].gsub(/\\\|/, '|').gsub(/\\\\/, '\\')
-    event['leef_product'] = event['leef_product'].gsub(/\\\|/, '|').gsub(/\\\\/, '\\')
-    event['leef_device_version'] = event['leef_device_version'].gsub(/\\\|/, '|').gsub(/\\\\/, '\\')
-    event['leef_eventid'] = event['leef_eventid'].gsub(/\\\|/, '|').gsub(/\\\\/, '\\')
-    #event['leef_name'] = event['leef_name'].gsub(/\\\|/, '|').gsub(/\\\\/, '\\')
-    #event['leef_severity'] = event['leef_severity'].gsub(/\\\|/, '|').gsub(/\\\\/, '\\') unless event['leef_severity'].nil?
+    # Store header fields
+    HEADER_FIELDS.each_with_index do |field_name, index|
+     store_header_field(event,field_name,split_data[index])
+    end
+    # Remainder is message
+    message = split_data[HEADER_FIELDS.size..-1].join('|')
 
     # Try and parse out the syslog header if there is one
-    if event['leef_version'].include? ' '
-      event['syslog'], unused, event['leef_version'] = event['leef_version'].rpartition(' ')
+    if event.get('leef_version').include? ' '
+     split_leef_version= event.get('leef_version').rpartition(' ')
+     event.set('syslog', split_leef_version[0])
+     event.set('leef_version',split_leef_version[2])
     end
 
     # Get rid of the LEEF bit in the version
-    event['leef_version'] = event['leef_version'].sub /^LEEF:/, ''
+    event.set('leef_version', event.get'leef_version').sub(/^LEEF:/, ''))
 
     # Strip any whitespace from the message
     if not message.nil? and message.include? '='
@@ -222,7 +229,7 @@ class LogStash::Codecs::LEEF < LogStash::Codecs::Base
   end
 
   def get_value(fieldname, event)
-    val = event[fieldname]
+    val = event.get(fieldname)
 
     return nil if val.nil?
 
